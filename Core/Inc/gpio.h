@@ -38,6 +38,7 @@
 void MX_GPIO_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+void NRF_Init(void);
 
 /* USER CODE END Prototypes */
 

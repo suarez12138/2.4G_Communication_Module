@@ -23,6 +23,10 @@
 #include "stm32f1xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "lcd.h"
+#include "spi.h"
+#include "24l01.h"
+#include "string.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,7 +46,19 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
+extern uint8_t is_receiver;
+extern uint8_t rxBuffer[1024];
+const uint8_t EMPTY_BUFFER[1024] = {0};
+extern uint8_t rxData[1024];
+extern uint32_t rxLength;
+extern Message to_send;
+extern uint8_t TX_ADDRESS[6];
+extern uint8_t RX_ADDRESS[6];
+extern uint8_t display_buffer[TOTAL_LINE][CHAR_PER_LINE];
+extern uint8_t line_type[TOTAL_LINE];
+extern uint16_t line_length;
 
+extern uint8_t is_connected;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -56,14 +72,19 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
-
+extern TIM_HandleTypeDef htim3;
+extern UART_HandleTypeDef huart1;
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
 
 /******************************************************************************/
-/*           Cortex-M3 Processor Interruption and Exception Handlers          */ 
+/*           Cortex-M3 Processor Interruption and Exception Handlers          */
 /******************************************************************************/
+void connect();
+
+void disconnect();
+
 /**
   * @brief This function handles Non maskable interrupt.
   */
@@ -197,7 +218,173 @@ void SysTick_Handler(void)
 /* please refer to the startup file (startup_stm32f1xx.s).                    */
 /******************************************************************************/
 
+/**
+  * @brief This function handles EXTI line[9:5] interrupts.
+  */
+void EXTI9_5_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI9_5_IRQn 0 */
+
+  /* USER CODE END EXTI9_5_IRQn 0 */
+  HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_5);
+  /* USER CODE BEGIN EXTI9_5_IRQn 1 */
+
+  /* USER CODE END EXTI9_5_IRQn 1 */
+}
+
+/**
+  * @brief This function handles TIM3 global interrupt.
+  */
+void TIM3_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM3_IRQn 0 */
+
+  /* USER CODE END TIM3_IRQn 0 */
+  HAL_TIM_IRQHandler(&htim3);
+  /* USER CODE BEGIN TIM3_IRQn 1 */
+
+  /* USER CODE END TIM3_IRQn 1 */
+}
+
+/**
+  * @brief This function handles USART1 global interrupt.
+  */
+void USART1_IRQHandler(void)
+{
+  /* USER CODE BEGIN USART1_IRQn 0 */
+
+  /* USER CODE END USART1_IRQn 0 */
+  HAL_UART_IRQHandler(&huart1);
+  /* USER CODE BEGIN USART1_IRQn 1 */
+  HAL_UART_Receive_IT(&huart1, (uint8_t*)rxBuffer, 1);
+
+  /* USER CODE END USART1_IRQn 1 */
+}
+
+/**
+  * @brief This function handles EXTI line[15:10] interrupts.
+  */
+void EXTI15_10_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI15_10_IRQn 0 */
+
+  /* USER CODE END EXTI15_10_IRQn 0 */
+  HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_15);
+  /* USER CODE BEGIN EXTI15_10_IRQn 1 */
+
+  /* USER CODE END EXTI15_10_IRQn 1 */
+}
+
 /* USER CODE BEGIN 1 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+
+	switch (GPIO_Pin)
+	{
+		case KEY0_Pin:
+			if (HAL_GPIO_ReadPin(KEY0_GPIO_Port, KEY0_Pin) == GPIO_PIN_RESET)
+			{
+				connect();
+			}
+			break;
+		case KEY1_Pin:
+			if (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == GPIO_PIN_RESET)
+			{
+				disconnect();
+
+			}
+			break;
+		default:
+			break;
+	}
+	HAL_Delay(100);
+}
+
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == USART1)
+	{
+		if (rxBuffer[0] == '\n')
+		{
+			// TODO: execution of command
+			char* token = strtok((char *)rxData, " ");
+			if (strcmp(token, "send") == 0)
+			{
+				char* to_send_data = (char *)(rxData + strlen(token) + 1);
+				HAL_UART_Transmit(&huart1, (uint8_t *)to_send_data, strlen(to_send_data), HAL_MAX_DELAY);
+				send_packet(to_send_data, MESSAGE_PAYLOAD);
+
+				make_line((char*)to_send_data, strlen((char*)to_send_data), LINE_SENT_MESSAGE);
+			}
+			else if (strcmp(token, "send_addr") == 0)
+			{
+				// set address of current host
+				char* addr = (char *)(rxData + strlen(token) + 1);
+				HAL_UART_Transmit(&huart1, (uint8_t *)addr, strlen(addr), HAL_MAX_DELAY);
+				addr[5] = '\0';
+				strcpy((char*)TX_ADDRESS, (char*)addr);
+			}
+			else if (strcmp(token, "recv_addr") == 0)
+			{
+				// set address of host to communicate
+				char* addr = (char *)(rxData + strlen(token) + 1);
+				HAL_UART_Transmit(&huart1, (uint8_t *)addr, strlen(addr), HAL_MAX_DELAY);
+				addr[5] = '\0';
+				strcpy((char*)RX_ADDRESS, (char*)addr);
+			}
+			else if (strcmp(token, "send_to_peer") == 0)
+			{
+				char* to_send_data = (char *)(rxData + strlen(token) + 1);
+				HAL_UART_Transmit(&huart1, (uint8_t *)to_send_data, strlen(to_send_data), HAL_MAX_DELAY);
+				NRF24L01_TX_Mode();
+				NRF24L01_TxPacket((uint8_t*)to_send_data);
+
+				make_line((char*)to_send_data, strlen((char*)to_send_data), LINE_SENT_MESSAGE);
+			}
+			else if (strcmp(token, "connect") == 0)
+			{
+				connect();
+			}
+			else if (strcmp(token, "disconnect") == 0)
+			{
+				disconnect();
+			}
+			rxLength = 0;
+			strlcpy((char*)rxData, (char*)EMPTY_BUFFER, 1024);
+
+		}
+		else if (rxBuffer[0] != '\r')
+		{
+			rxData[rxLength] = rxBuffer[0];
+			rxLength++;
+		}
+	}
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	if (is_connected)
+	{
+		Message message;
+		message.message_type = MESSAGE_KEEP_ALIVE;
+		message.payload[0] = '1';
+		message.payload[1] = '\n';
+		NRF24L01_TX_Mode();
+		if (NRF24L01_TxPacket((uint8_t*)&message) != TX_OK)
+		{
+			char error_message[] = "[system] Connection Lost";
+			make_line(error_message, strlen(error_message), LINE_CONNECTION);
+			HAL_UART_Transmit(&huart1, (uint8_t*)error_message, strlen(error_message), HAL_MAX_DELAY);
+
+			for (uint8_t i = 0; i < 4; i++)
+			{
+				HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
+				HAL_Delay(300);
+			}
+		}
+	}
+}
 
 /* USER CODE END 1 */
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
